@@ -27,16 +27,15 @@ func tap(_ start: Double) -> Double {
 // The script.
 expected.append((.tap, tap(1.5)))
 expected.append((.doubleTap, tap(tap(3.5) + 0.12)))
-expected.append((.push, stroke(6.0, 0.35, 0.5)))
-_ = stroke(7.4, 0.5, -0.35) // hand comes back: not a gesture
-expected.append((.pull, stroke(9.5, 0.35, -0.5)))
-_ = stroke(10.9, 0.5, 0.35) // hand comes back
-// A fast, close push (3 m/s): its echo spreads wide and must not be mistaken for noise.
-expected.append((.push, stroke(12.0, 0.25, 3.0)))
-_ = stroke(12.9, 0.4, -1.5) // hand comes back
-let typingStart = 14.5, typingEnd = 16.1
-expected.append((.tap, tap(17.0)))
-let duration = 19.0
+expected.append((.tripleTap, tap(tap(tap(6.0) + 0.12) + 0.12)))
+// A hand moved in and left there, then lowered much later: not a tap.
+_ = stroke(8.5, 0.35, 0.5)
+_ = stroke(10.0, 0.5, -0.35)
+// A fast, close tap (3 m/s): its echo spreads wide and must not be mistaken for noise.
+expected.append((.tap, stroke(stroke(11.5, 0.25, 3.0) + 0.15, 0.3, -1.5)))
+let typingStart = 13.5, typingEnd = 15.1
+expected.append((.tap, tap(16.0)))
+let duration = 18.0
 
 func handVelocity(_ t: Double) -> Double {
   for m in motions where t >= m.start && t < m.start + m.duration {

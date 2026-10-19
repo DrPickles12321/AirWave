@@ -21,7 +21,7 @@ final class AppModel: ObservableObject {
   private let hud = GestureHUD()
   @Published private var mapping: [HandGesture: Action] = [:]
 
-  private static let defaults: [HandGesture: Action] = [.tap: .playPause, .doubleTap: .nextTrack, .push: .none, .pull: .none]
+  private static let defaults: [HandGesture: Action] = [.tap: .playPause, .doubleTap: .nextTrack, .tripleTap: .previousTrack]
 
   init() {
     for gesture in HandGesture.allCases {

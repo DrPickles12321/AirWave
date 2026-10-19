@@ -57,7 +57,7 @@ struct SonarView: View {
       case .off: return ("pause.circle", "Sonar is off.", .secondary)
       case .starting: return ("hourglass", "Starting…", .secondary)
       case .listening where sonar.noisy: return ("waveform.badge.exclamationmark", "Too noisy right now. Waiting for quiet.", .orange)
-      case .listening: return ("checkmark.circle", "Listening at 21 kHz. Wave 10–30 cm in front of the screen.", .green)
+      case .listening: return ("checkmark.circle", "Listening. Hold your palm toward the screen about 20 cm away and tap the air.", .green)
       case .cantHearTone: return ("speaker.slash", "Can't hear the tone. Unmute, use the built-in speakers, set volume to about half.", .orange)
       case .noPermission: return ("mic.slash", "Allow the microphone in System Settings → Privacy & Security → Microphone.", .red)
       case .failed(let message): return ("exclamationmark.triangle", message, .red)
@@ -159,19 +159,17 @@ private struct GestureRow: View {
 
   private var icon: String {
     switch gesture {
-    case .tap: "hand.tap"
-    case .doubleTap: "hand.tap.fill"
-    case .push: "arrow.right.to.line"
-    case .pull: "arrow.left.to.line"
+    case .tap: "1.circle"
+    case .doubleTap: "2.circle"
+    case .tripleTap: "3.circle"
     }
   }
 
   private var hint: String {
     switch gesture {
-    case .tap: "Quick push toward the screen and back"
-    case .doubleTap: "Two taps in a row"
-    case .push: "Move your hand toward the screen"
-    case .pull: "Move your hand away from the screen"
+    case .tap: "Push toward the screen and back, once"
+    case .doubleTap: "Twice in a row"
+    case .tripleTap: "Three times in a row"
     }
   }
 }

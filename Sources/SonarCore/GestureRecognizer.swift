@@ -97,9 +97,8 @@ public final class GestureRecognizer {
     let v = smooth
 
     if noisy {
-      // Something loud is masking the echo: drop anything half-recognized.
-      current = nil
-      held = nil
+      // Something loud is masking the echo for a moment: skip this frame, but keep any gesture in
+      // progress (a click mid-gesture shouldn't cancel it).
     } else if var stroke = current {
       let continuing = stroke.direction == .toward ? v > threshold * 0.35 : v < -threshold * 0.35
       if continuing {

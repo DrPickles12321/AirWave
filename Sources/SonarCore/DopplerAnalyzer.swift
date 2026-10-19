@@ -15,6 +15,8 @@ public struct DopplerFrame: Sendable {
   public var away: Float
   /// A broadband sound (typing, keys, a clap) is masking the echo, so motion can't be trusted.
   public var noisy: Bool
+  /// How far (dB, averaged) the bins well away from the tone sit above their recent level.
+  public var noiseLevel: Float
   /// How far the tone stands above the background (dB). Low means the speakers are muted or too quiet.
   public var toneSNR: Float
   /// Echo energy above the resting spectrum (dB) for each bin from -span to +span around the tone.
@@ -103,17 +105,26 @@ public final class DopplerAnalyzer {
       // Learn what the room sounds like with nothing moving.
       let w = 1 / Float(frames)
       for j in 0..<db.count { baseline[j] += (db[j] - baseline[j]) * w }
-      return DopplerFrame(velocity: 0, toward: 0, away: 0, noisy: false, toneSNR: snr, bands: [Float](repeating: 0, count: 2 * span + 1))
+      return DopplerFrame(velocity: 0, toward: 0, away: 0, noisy: false, noiseLevel: 0, toneSNR: snr, bands: [Float](repeating: 0, count: 2 * span + 1))
     }
 
     var excess = [Float](repeating: 0, count: db.count)
     for j in 0..<db.count { excess[j] = max(0, db[j] - baseline[j] - floorDB) }
 
-    // Broadband sound lifts bins far from the tone too; an echo only lifts the ones near it.
+    // Broadband sound (a key click, a tap on the desk) lifts every bin about equally, far from the
+    // tone as well as near it; an echo off a moving hand only lifts the bins near the tone. So measure
+    // the broadband level far away and take it off the near bins, keeping whatever motion is left.
+    // A clear burst (typing, say) still pauses gesture detection while it lasts.
     var far: Float = 0
     for k in noiseFrom...noiseTo { far += excess[reach + k] + excess[reach - k] }
     far /= Float(2 * (noiseTo - noiseFrom + 1))
-    let noisy = far > 2.5
+    let noisy = far > 8
+    if far > 0 {
+      for k in 0...span {
+        excess[reach + k] = max(0, excess[reach + k] - far - floorDB)
+        excess[reach - k] = max(0, excess[reach - k] - far - floorDB)
+      }
+    }
 
     // Energy further from the tone means faster motion, so weight by distance (capped, so faint
     // flicker in the outermost bins can't add up to much).
@@ -125,16 +136,24 @@ public final class DopplerAnalyzer {
       away += excess[reach - k] * weight
     }
 
-    // Follow slow changes in the room: quickly while everything is still, barely while moving.
+    // Follow changes in the room. Near the tone: quickly while everything is still, barely while
+    // moving (so a hand held still doesn't fade into the background mid-gesture). Far from the tone:
+    // always fairly quickly, so steady sound (a fan, music) settles into the background within a
+    // second and only sudden bursts like typing count as noise.
     let still = !noisy && toward + away < 4
-    let alpha: Float = still ? 0.05 : 0.002
-    for j in 0..<db.count { baseline[j] += (db[j] - baseline[j]) * alpha }
+    let nearAlpha: Float = still ? 0.05 : 0.002
+    let farAlpha: Float = noisy ? 0.02 : 0.08
+    for j in 0..<db.count {
+      let alpha = abs(j - reach) >= noiseFrom ? farAlpha : nearAlpha
+      baseline[j] += (db[j] - baseline[j]) * alpha
+    }
 
     return DopplerFrame(
       velocity: noisy ? 0 : toward - away,
       toward: toward,
       away: away,
       noisy: noisy,
+      noiseLevel: far,
       toneSNR: snr,
       bands: Array(excess[(reach - span)...(reach + span)])
     )

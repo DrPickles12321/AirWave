@@ -100,7 +100,8 @@ final class SonarEngine: ObservableObject {
     let step = 2 * Double.pi * toneHz / outRate
     var phase = 0.0
     var level: Float = 0
-    toneTarget = 0.25
+    // Diagnostics: `defaults write app.airwave.AirWave debugMuteTone -bool true` keeps the tone silent.
+    toneTarget = UserDefaults.standard.bool(forKey: "debugMuteTone") ? 0 : 0.25
     let source = AVAudioSourceNode(format: toneFormat) { [unowned self] _, _, frameCount, buffers -> OSStatus in
       let list = UnsafeMutableAudioBufferListPointer(buffers)
       let target = self.toneTarget
@@ -123,7 +124,7 @@ final class SonarEngine: ObservableObject {
       FileManager.default.createFile(atPath: path, contents: nil)
       debugLog = FileHandle(forWritingAtPath: path)
       debugStart = CACurrentMediaTime()
-      debugLog?.write("# input \(Int(rate)) Hz, \(inFormat.channelCount) ch, output \(Int(outRate)) Hz, tone \(Int(toneHz)) Hz\n# t velocity toward away snr noisy threshold peakBand peakDB gestures\n".data(using: .utf8)!)
+      debugLog?.write("# input \(Int(rate)) Hz, \(inFormat.channelCount) ch, output \(Int(outRate)) Hz, tone \(Int(toneHz)) Hz\n# t velocity toward away snr noisy threshold peakBand peakDB noiseDB gestures\n".data(using: .utf8)!)
     }
     dsp.sync {
       let a = DopplerAnalyzer(sampleRate: rate, toneHz: toneHz)
@@ -133,9 +134,27 @@ final class SonarEngine: ObservableObject {
       pending = []
       quietToneFrames = 0
     }
-    input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(hop), format: inFormat) { [weak self] buffer, _ in
+    var expectedSampleTime: AVAudioFramePosition = -1
+    input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(hop), format: inFormat) { [weak self] buffer, when in
       guard let self, let channel = buffer.floatChannelData?[0] else { return }
-      let samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+      let count = Int(buffer.frameLength)
+      let samples = Array(UnsafeBufferPointer(start: channel, count: count))
+      if self.debugLog != nil {
+        // Buffer timing: a gap or overlap in sample time means the stream skipped or repeated audio.
+        let start = when.sampleTime
+        let gap = expectedSampleTime < 0 ? 0 : start - expectedSampleTime
+        expectedSampleTime = start + AVAudioFramePosition(count)
+        // Biggest sample-to-sample jump, relative to what a pure tone allows.
+        var jump: Float = 0
+        var at = 0
+        for i in 1..<count where abs(samples[i] - samples[i - 1]) > jump {
+          jump = abs(samples[i] - samples[i - 1])
+          at = i
+        }
+        let peak = samples.map(abs).max() ?? 0
+        let note = String(format: "# buffer n=%d gap=%lld jump=%.4f at=%d peak=%.4f\n", count, gap, jump, at, peak)
+        self.dsp.async { self.debugLog?.write(note.data(using: .utf8)!) }
+      }
       self.dsp.async { self.ingest(samples) }
     }
 
@@ -187,9 +206,9 @@ final class SonarEngine: ObservableObject {
       if let debugLog {
         let mid = frame.bands.count / 2
         let peak = frame.bands.indices.max(by: { frame.bands[$0] < frame.bands[$1] }) ?? mid
-        let line = String(format: "%.3f %.0f %.0f %.0f %.1f %d %.0f %d %.1f %@\n",
+        let line = String(format: "%.3f %.0f %.0f %.0f %.1f %d %.0f %d %.1f %.1f %@\n",
                           CACurrentMediaTime() - debugStart, frame.velocity, frame.toward, frame.away, frame.toneSNR,
-                          frame.noisy ? 1 : 0, recognizer.threshold, peak - mid, frame.bands.isEmpty ? 0 : frame.bands[peak],
+                          frame.noisy ? 1 : 0, recognizer.threshold, peak - mid, frame.bands.isEmpty ? 0 : frame.bands[peak], frame.noiseLevel,
                           gestures.map(\.rawValue).joined(separator: ","))
         debugLog.write(line.data(using: .utf8)!)
       }

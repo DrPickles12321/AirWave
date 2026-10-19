@@ -43,6 +43,10 @@ final class SonarEngine: ObservableObject {
   /// Tone loudness the render thread fades toward (so starting and stopping never clicks).
   private var toneTarget: Float = 0
   private var configObserver: NSObjectProtocol?
+  /// Optional diagnostics: one line of numbers per analysis frame (no audio). Turn on with
+  /// `defaults write app.airwave.AirWave debugLog -bool true`; written to /tmp/airwave-debug.log.
+  private var debugLog: FileHandle?
+  private var debugStart: CFTimeInterval = 0
 
   var isOn: Bool { state != .off && state != .noPermission }
 
@@ -114,6 +118,13 @@ final class SonarEngine: ObservableObject {
     tone = source
 
     let rate = inFormat.sampleRate
+    if UserDefaults.standard.bool(forKey: "debugLog") {
+      let path = "/tmp/airwave-debug.log"
+      FileManager.default.createFile(atPath: path, contents: nil)
+      debugLog = FileHandle(forWritingAtPath: path)
+      debugStart = CACurrentMediaTime()
+      debugLog?.write("# input \(Int(rate)) Hz, \(inFormat.channelCount) ch, output \(Int(outRate)) Hz, tone \(Int(toneHz)) Hz\n# t velocity toward away snr noisy threshold peakBand peakDB gestures\n".data(using: .utf8)!)
+    }
     dsp.sync {
       let a = DopplerAnalyzer(sampleRate: rate, toneHz: toneHz)
       analyzer = a
@@ -173,6 +184,15 @@ final class SonarEngine: ObservableObject {
       history.append(frame.velocity)
       // The tone should stand far above the background; if not, the mic can't hear it.
       quietToneFrames = frame.toneSNR < 25 ? quietToneFrames + 1 : 0
+      if let debugLog {
+        let mid = frame.bands.count / 2
+        let peak = frame.bands.indices.max(by: { frame.bands[$0] < frame.bands[$1] }) ?? mid
+        let line = String(format: "%.3f %.0f %.0f %.0f %.1f %d %.0f %d %.1f %@\n",
+                          CACurrentMediaTime() - debugStart, frame.velocity, frame.toward, frame.away, frame.toneSNR,
+                          frame.noisy ? 1 : 0, recognizer.threshold, peak - mid, frame.bands.isEmpty ? 0 : frame.bands[peak],
+                          gestures.map(\.rawValue).joined(separator: ","))
+        debugLog.write(line.data(using: .utf8)!)
+      }
       publish(frame, gestures, threshold: recognizer.threshold)
     }
   }

@@ -116,8 +116,9 @@ public final class GestureRecognizer {
       if time >= cooldownUntil {
         current = Stroke(direction: v > 0 ? .toward : .away, start: time, end: time, peak: abs(v), total: abs(v), frames: 1)
       }
-    } else {
-      // Nothing moving: learn the room's resting jitter (quickly at first).
+    } else if abs(v) < threshold * 0.5 {
+      // Clearly still: learn the room's resting jitter (quickly at first). Frames with some motion
+      // in them are left out, or they'd creep the threshold up.
       let rate: Float = time < 2 ? 0.05 : 0.01
       jitter = jitter * (1 - rate) + abs(v) * rate
       threshold = max(tuning.minThreshold, jitter * tuning.noiseMultiple)

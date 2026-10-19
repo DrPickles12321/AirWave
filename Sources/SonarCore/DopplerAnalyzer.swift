@@ -26,16 +26,20 @@ public final class DopplerAnalyzer {
   public let toneHz: Double
   /// FFT length (samples). 4096 at 48 kHz is an 85 ms window with 11.7 Hz bins.
   public let size: Int
-  /// Bins either side of the tone that count as echo (24 bins = 280 Hz, about 2.3 m/s of hand speed).
+  /// Bins either side of the tone that count as echo (40 bins = 470 Hz, about 3.8 m/s of hand speed).
   public let span: Int
   public var binHz: Double { sampleRate / Double(size) }
 
   /// Bins next to the tone that its own window leakage covers; slower motion than this is ignored.
   private let guardBins = 3
-  /// Bins beyond the echo range, used to spot broadband noise.
-  private let farBins = 24
-  /// How far above the resting level a bin must rise to count (dB).
-  private let floorDB: Float = 3
+  /// Broadband noise (typing, keys) is measured this far from the tone: 80 to 120 bins, about 1 to 1.4 kHz
+  /// away, beyond anything a moving hand can reach. (Measuring closer mistook fast, close waves,
+  /// whose echo smears over a wide range, for noise.)
+  private let noiseFrom = 80
+  private let noiseTo = 120
+  /// How far above the resting level a bin must rise to count (dB). Real echoes rise 20 to 60 dB;
+  /// random background flicker stays below this.
+  private let floorDB: Float = 6
   private let center: Int
   private let setup: vDSP_DFT_Setup
   private let window: [Float]
@@ -47,7 +51,7 @@ public final class DopplerAnalyzer {
   private var frames = 0
   private let calibrationFrames: Int
 
-  public init(sampleRate: Double, toneHz: Double, size: Int = 4096, span: Int = 24, calibrationFrames: Int = 30) {
+  public init(sampleRate: Double, toneHz: Double, size: Int = 4096, span: Int = 40, calibrationFrames: Int = 30) {
     precondition(size.nonzeroBitCount == 1, "FFT size must be a power of two")
     self.sampleRate = sampleRate
     self.toneHz = toneHz
@@ -55,7 +59,7 @@ public final class DopplerAnalyzer {
     self.span = span
     self.calibrationFrames = calibrationFrames
     center = Int((toneHz / (sampleRate / Double(size))).rounded())
-    precondition(center + span + farBins < size / 2, "tone too close to the Nyquist limit")
+    precondition(center + noiseTo < size / 2, "tone too close to the Nyquist limit")
     setup = vDSP_DFT_zrop_CreateSetup(nil, vDSP_Length(size), .FORWARD)!
     // Blackman keeps the tone's own leakage to a few bins, so small shifts stand out.
     window = vDSP.window(ofType: Float.self, usingSequence: .blackman, count: size, isHalfWindow: false)
@@ -63,7 +67,7 @@ public final class DopplerAnalyzer {
     odds = [Float](repeating: 0, count: size / 2)
     outR = [Float](repeating: 0, count: size / 2)
     outI = [Float](repeating: 0, count: size / 2)
-    baseline = [Float](repeating: 0, count: 2 * (span + farBins) + 1)
+    baseline = [Float](repeating: 0, count: 2 * noiseTo + 1)
   }
 
   deinit {
@@ -85,13 +89,14 @@ public final class DopplerAnalyzer {
     }
     vDSP_DFT_Execute(setup, evens, odds, &outR, &outI)
 
-    let reach = span + farBins
+    let reach = noiseTo
     var db = [Float](repeating: 0, count: 2 * reach + 1)
     for j in 0..<db.count {
       let k = center - reach + j
       db[j] = 10 * log10f(outR[k] * outR[k] + outI[k] * outI[k] + 1e-12)
     }
-    let snr = db[reach] - median(Array(db[0..<farBins]) + Array(db[(db.count - farBins)...]))
+    let noiseBins = Array(db[0...(reach - noiseFrom)]) + Array(db[(reach + noiseFrom)...])
+    let snr = db[reach] - median(noiseBins)
 
     frames += 1
     if frames <= calibrationFrames {
@@ -104,17 +109,18 @@ public final class DopplerAnalyzer {
     var excess = [Float](repeating: 0, count: db.count)
     for j in 0..<db.count { excess[j] = max(0, db[j] - baseline[j] - floorDB) }
 
-    // Broadband sound lifts the far bins too; an echo only lifts the ones near the tone.
+    // Broadband sound lifts bins far from the tone too; an echo only lifts the ones near it.
     var far: Float = 0
-    for k in (span + 1)...reach { far += excess[reach + k] + excess[reach - k] }
-    far /= Float(2 * farBins)
+    for k in noiseFrom...noiseTo { far += excess[reach + k] + excess[reach - k] }
+    far /= Float(2 * (noiseTo - noiseFrom + 1))
     let noisy = far > 2.5
 
-    // Energy further from the tone means faster motion, so weight by distance.
+    // Energy further from the tone means faster motion, so weight by distance (capped, so faint
+    // flicker in the outermost bins can't add up to much).
     var toward: Float = 0
     var away: Float = 0
     for k in guardBins...span {
-      let weight = Float(k) / 10
+      let weight = Float(min(k, 20)) / 10
       toward += excess[reach + k] * weight
       away += excess[reach - k] * weight
     }

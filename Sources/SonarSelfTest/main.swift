@@ -31,9 +31,12 @@ expected.append((.push, stroke(6.0, 0.35, 0.5)))
 _ = stroke(7.4, 0.5, -0.35) // hand comes back: not a gesture
 expected.append((.pull, stroke(9.5, 0.35, -0.5)))
 _ = stroke(10.9, 0.5, 0.35) // hand comes back
-let typingStart = 13.0, typingEnd = 14.6
-expected.append((.tap, tap(15.5)))
-let duration = 17.5
+// A fast, close push (3 m/s): its echo spreads wide and must not be mistaken for noise.
+expected.append((.push, stroke(12.0, 0.25, 3.0)))
+_ = stroke(12.9, 0.4, -1.5) // hand comes back
+let typingStart = 14.5, typingEnd = 16.1
+expected.append((.tap, tap(17.0)))
+let duration = 19.0
 
 func handVelocity(_ t: Double) -> Double {
   for m in motions where t >= m.start && t < m.start + m.duration {
@@ -55,7 +58,7 @@ func gaussian() -> Double {
 // Synthesize.
 let count = Int(duration * sampleRate)
 var signal = [Float](repeating: 0, count: count)
-var handPhase = 0.0
+var handPhase = 0.0, slowPhase = 0.0, fastPhase = 0.0
 var nextClick = typingStart
 for n in 0..<count {
   let t = Double(n) / sampleRate
@@ -63,7 +66,10 @@ for n in 0..<count {
   let room = 0.01 * sin(2 * .pi * toneHz * t + 1.1)
   let v = handVelocity(t)
   handPhase += 2 * .pi * toneHz * (1 + 2 * v / soundSpeed) / sampleRate
-  let hand = 0.02 * sin(handPhase)
+  // Fingers and wrist move a little slower and faster than the palm, smearing the echo.
+  slowPhase += 2 * .pi * toneHz * (1 + 2 * 0.6 * v / soundSpeed) / sampleRate
+  fastPhase += 2 * .pi * toneHz * (1 + 2 * 1.4 * v / soundSpeed) / sampleRate
+  let hand = 0.02 * sin(handPhase) + 0.008 * sin(slowPhase) + 0.008 * sin(fastPhase)
   signal[n] = Float(direct + room + hand + 2e-4 * gaussian())
 }
 // Typing: short broadband clicks every 80-180 ms.

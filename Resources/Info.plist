@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>AirWave</string>
+  <key>CFBundleDisplayName</key>
+  <string>AirWave</string>
+  <key>CFBundleIdentifier</key>
+  <string>app.airwave.AirWave</string>
+  <key>CFBundleExecutable</key>
+  <string>AirWave</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <!-- Menu-bar only: no Dock icon. -->
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>AirWave listens for the echo of an inaudible tone to sense your hand moving. Audio is analysed on your Mac as it arrives and is never recorded or sent anywhere.</string>
+</dict>
+</plist>

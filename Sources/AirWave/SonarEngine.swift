@@ -29,6 +29,7 @@ final class SonarEngine: ObservableObject {
   let toneHz = 21_000.0
 
   private let engine = AVAudioEngine()
+  private let mic = MicCapture()
   private var tone: AVAudioSourceNode?
   private let dsp = DispatchQueue(label: "app.airwave.dsp", qos: .userInteractive)
   private let hop = 1024
@@ -83,11 +84,30 @@ final class SonarEngine: ObservableObject {
     }
   }
 
+  /// Diagnostics: notes why starting failed (only when the debug log is on).
+  private func note(_ message: String) {
+    guard UserDefaults.standard.bool(forKey: "debugLog") else { return }
+    let line = "# \(Date()): \(message)\n"
+    if let handle = FileHandle(forWritingAtPath: "/tmp/airwave-debug.log") {
+      handle.seekToEndOfFile()
+      handle.write(line.data(using: .utf8)!)
+    } else {
+      FileManager.default.createFile(atPath: "/tmp/airwave-debug.log", contents: line.data(using: .utf8))
+    }
+  }
+
   private func begin() {
-    let input = engine.inputNode
-    let inFormat = input.inputFormat(forBus: 0)
-    guard inFormat.sampleRate >= 44_100 else {
-      state = .failed("No microphone that can hear high frequencies")
+    // Always the laptop's own speakers and microphone, even when AirPods or other headphones are the
+    // system's current devices (they can't carry a 21 kHz tone). The tone goes out through an
+    // output-only engine pinned to the speakers; the mic is read on its own, from the built-in device.
+    guard let speakers = BuiltInAudio.speakers, let outUnit = engine.outputNode.audioUnit, BuiltInAudio.use(speakers, for: outUnit) else {
+      note("couldn't pin the built-in speakers (found: \(String(describing: BuiltInAudio.speakers)))")
+      state = .failed("Couldn't open the built-in speakers")
+      return
+    }
+    guard let micDevice = BuiltInAudio.captureMicrophone else {
+      note("no built-in capture microphone")
+      state = .failed("Couldn't find the built-in microphone")
       return
     }
     let outRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
@@ -118,13 +138,13 @@ final class SonarEngine: ObservableObject {
     engine.connect(source, to: engine.mainMixerNode, format: toneFormat)
     tone = source
 
-    let rate = inFormat.sampleRate
+    let rate = mic.sampleRate
     if UserDefaults.standard.bool(forKey: "debugLog") {
       let path = "/tmp/airwave-debug.log"
       FileManager.default.createFile(atPath: path, contents: nil)
       debugLog = FileHandle(forWritingAtPath: path)
       debugStart = CACurrentMediaTime()
-      debugLog?.write("# input \(Int(rate)) Hz, \(inFormat.channelCount) ch, output \(Int(outRate)) Hz, tone \(Int(toneHz)) Hz\n# t velocity toward away snr noisy threshold peakBand peakDB noiseDB gestures\n".data(using: .utf8)!)
+      debugLog?.write("# mic \(micDevice.localizedName) \(Int(rate)) Hz, output device \(speakers) \(Int(outRate)) Hz, tone \(Int(toneHz)) Hz\n# t velocity toward away snr noisy threshold peakBand peakDB noiseDB gestures\n".data(using: .utf8)!)
     }
     dsp.sync {
       let a = DopplerAnalyzer(sampleRate: rate, toneHz: toneHz)
@@ -134,40 +154,20 @@ final class SonarEngine: ObservableObject {
       pending = []
       quietToneFrames = 0
     }
-    var expectedSampleTime: AVAudioFramePosition = -1
-    input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(hop), format: inFormat) { [weak self] buffer, when in
-      guard let self, let channel = buffer.floatChannelData?[0] else { return }
-      let count = Int(buffer.frameLength)
-      let samples = Array(UnsafeBufferPointer(start: channel, count: count))
-      if self.debugLog != nil {
-        // Buffer timing: a gap or overlap in sample time means the stream skipped or repeated audio.
-        let start = when.sampleTime
-        let gap = expectedSampleTime < 0 ? 0 : start - expectedSampleTime
-        expectedSampleTime = start + AVAudioFramePosition(count)
-        // Biggest sample-to-sample jump, relative to what a pure tone allows.
-        var jump: Float = 0
-        var at = 0
-        for i in 1..<count where abs(samples[i] - samples[i - 1]) > jump {
-          jump = abs(samples[i] - samples[i - 1])
-          at = i
-        }
-        let peak = samples.map(abs).max() ?? 0
-        let note = String(format: "# buffer n=%d gap=%lld jump=%.4f at=%d peak=%.4f\n", count, gap, jump, at, peak)
-        self.dsp.async { self.debugLog?.write(note.data(using: .utf8)!) }
-      }
-      self.dsp.async { self.ingest(samples) }
-    }
 
     do {
       engine.prepare()
       try engine.start()
+      mic.onSamples = { [weak self] samples in self?.ingest(samples) }
+      try mic.start(device: micDevice, queue: dsp)
       state = .listening
     } catch {
+      note("start failed: \(error)")
       teardown()
       state = .failed(error.localizedDescription)
       return
     }
-    // Switching audio devices (headphones, displays) stops the engine; start again on the new ones.
+    // Plugging in or switching audio devices can stop the engine; start again on the built-in ones.
     configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
       guard let self, self.isOn else { return }
       self.teardown()
@@ -179,7 +179,7 @@ final class SonarEngine: ObservableObject {
   private func teardown() {
     if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
     configObserver = nil
-    engine.inputNode.removeTap(onBus: 0)
+    mic.stop()
     engine.stop()
     if let tone {
       engine.detach(tone)
